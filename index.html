@@ -39,6 +39,9 @@
         const WhatsAppIcon = () => <i data-lucide="message-circle" className="w-5 h-5"></i>;
         const UserIcon = () => <i data-lucide="user" className="w-4 h-4"></i>;
         const EditIcon = () => <i data-lucide="pencil" className="w-3 h-3"></i>;
+        const ResetIcon = () => <i data-lucide="rotate-ccw" className="w-3 h-3"></i>;
+        const PlusIcon = () => <i data-lucide="plus" className="w-4 h-4"></i>;
+        const XIcon = () => <i data-lucide="x" className="w-5 h-5"></i>;
 
         // Contactos
         const CONTACTS = [
@@ -91,39 +94,83 @@
         };
 
         const App = () => {
-            // Ahora 'products' es un estado, lo que permite edición
-            const [products, setProducts] = useState(INITIAL_DATA);
-            const [quantities, setQuantities] = useState({});
+            // Estados
+            const [products, setProducts] = useState(() => {
+                const saved = localStorage.getItem('savedPrices');
+                if (saved) {
+                    try {
+                        const parsedSaved = JSON.parse(saved);
+                        // Merge: Si hay productos originales, usar sus precios guardados. Si hay productos NUEVOS en el array original, agregarlos.
+                        // Además, si hay productos CUSTOM en localStorage, mantenerlos.
+                        
+                        // 1. Crear mapa de productos guardados
+                        const savedMap = new Map(parsedSaved.map(p => [p.id, p]));
+                        
+                        // 2. Recorrer INITIAL_DATA y actualizar con lo guardado
+                        const mergedInitial = INITIAL_DATA.map(p => {
+                            const savedProduct = savedMap.get(p.id);
+                            return savedProduct ? { ...p, costGross: savedProduct.costGross, srp: savedProduct.srp } : p;
+                        });
+
+                        // 3. Encontrar productos totalmente nuevos creados por el usuario (IDs que no están en INITIAL_DATA)
+                        const customProducts = parsedSaved.filter(p => !INITIAL_DATA.some(init => init.id === p.id));
+
+                        return [...mergedInitial, ...customProducts];
+                    } catch (e) {
+                        return INITIAL_DATA;
+                    }
+                }
+                return INITIAL_DATA;
+            });
+
+            const [quantities, setQuantities] = useState(() => {
+                const saved = localStorage.getItem('savedOrder');
+                return saved ? JSON.parse(saved) : {};
+            });
+
             const [searchTerm, setSearchTerm] = useState("");
+            const [selectedCategory, setSelectedCategory] = useState("Todos");
             const [showSummary, setShowSummary] = useState(false);
+            const [showAddProduct, setShowAddProduct] = useState(false);
             const [confirmDelete, setConfirmDelete] = useState(false);
 
-            // Inicializar Lucide icons
-            useEffect(() => {
-                lucide.createIcons();
-            }, []);
-            
-            useEffect(() => {
-                lucide.createIcons();
-            }, [searchTerm, showSummary, quantities, confirmDelete, products]);
+            // Estado para formulario de nuevo producto
+            const [newProductData, setNewProductData] = useState({
+                name: '',
+                category: '',
+                unitsPerBox: '',
+                costGross: '',
+                srp: ''
+            });
 
-            // Función para actualizar precios en el estado
+            // Persistencia
+            useEffect(() => {
+                localStorage.setItem('savedPrices', JSON.stringify(products));
+            }, [products]);
+
+            useEffect(() => {
+                localStorage.setItem('savedOrder', JSON.stringify(quantities));
+            }, [quantities]);
+
+            // Iconos
+            useEffect(() => {
+                lucide.createIcons();
+            }, [searchTerm, showSummary, quantities, confirmDelete, products, selectedCategory, showAddProduct]);
+
+            const categories = useMemo(() => {
+                return ["Todos", ...new Set(products.map(p => p.category))];
+            }, [products]);
+
+            // Manejadores
             const handleProductUpdate = (id, field, value) => {
-                setProducts(prevProducts => prevProducts.map(p => {
-                    if (p.id === id) {
-                        return { ...p, [field]: parseFloat(value) || 0 };
-                    }
-                    return p;
-                }));
+                setProducts(prev => prev.map(p => p.id === id ? { ...p, [field]: parseFloat(value) || 0 } : p));
             };
 
             const handleQuantityChange = (id, type, value) => {
                 setQuantities(prev => {
                     const current = prev[id] || { units: 0, boxes: 0 };
                     const newVal = Math.max(0, parseInt(value) || 0);
-                    
                     const updated = { ...current, [type]: newVal };
-                    
                     if (updated.units === 0 && updated.boxes === 0) {
                         const { [id]: _, ...rest } = prev;
                         return rest;
@@ -155,12 +202,50 @@
                 });
             };
 
+            // Agregar Nuevo Producto
+            const handleAddProductSubmit = (e) => {
+                e.preventDefault();
+                const costGross = parseFloat(newProductData.costGross);
+                const costNet = Math.round(costGross / 1.19); // Cálculo automático neto aproximado
+                
+                const newProduct = {
+                    id: Date.now(), // ID único basado en tiempo
+                    name: newProductData.name,
+                    desc: `${newProductData.unitsPerBox} un/caja (Agregado)`,
+                    unitsPerBox: parseInt(newProductData.unitsPerBox),
+                    costNet: costNet,
+                    costGross: costGross,
+                    srp: parseFloat(newProductData.srp),
+                    category: newProductData.category || 'Otros'
+                };
+
+                setProducts(prev => [...prev, newProduct]);
+                setShowAddProduct(false);
+                setNewProductData({ name: '', category: '', unitsPerBox: '', costGross: '', srp: '' });
+                alert('¡Producto agregado correctamente!');
+            };
+
+            // Restaurar precios (Solo originales)
+            const handleRestorePrices = () => {
+                if(confirm('¿Restaurar precios de lista ORIGINALES? Los productos nuevos que creaste SE MANTENDRÁN.')) {
+                    setProducts(prev => {
+                        // Mantener los productos custom (los que no están en INITIAL_DATA)
+                        const customProducts = prev.filter(p => !INITIAL_DATA.some(init => init.id === p.id));
+                        // Volver a cargar los originales con precios base
+                        return [...INITIAL_DATA, ...customProducts];
+                    });
+                }
+            };
+
+            // Cálculos
             const filteredProducts = useMemo(() => {
-                return products.filter(p => 
-                    p.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-                    p.category.toLowerCase().includes(searchTerm.toLowerCase())
-                );
-            }, [searchTerm, products]);
+                return products.filter(p => {
+                    const matchesSearch = p.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+                                        p.category.toLowerCase().includes(searchTerm.toLowerCase());
+                    const matchesCategory = selectedCategory === "Todos" || p.category === selectedCategory;
+                    return matchesSearch && matchesCategory;
+                });
+            }, [searchTerm, products, selectedCategory]);
 
             const totals = useMemo(() => {
                 let totalCostNet = 0;
@@ -172,13 +257,8 @@
                     const product = products.find(p => p.id === parseInt(id));
                     if (product) {
                         const totalUnits = qty.units + (qty.boxes * product.unitsPerBox);
-                        // costNet se estima basado en el Gross si cambiaron el Gross manual, o usamos el net fijo si no hay formula.
-                        // Para simplificar y mantener consistencia tras edicion, asumiremos que CostGross es el maestro para calculos de ganancia.
-                        
                         totalCostGross += totalUnits * product.costGross;
-                        // Recalculamos el neto aproximado (Gross / 1.19) para mantener coherencia visual
                         totalCostNet += totalUnits * (product.costGross / 1.19);
-                        
                         totalRevenue += totalUnits * product.srp;
                         totalItems += totalUnits;
                     }
@@ -189,6 +269,13 @@
 
                 return { totalCostNet, totalCostGross, totalRevenue, profit, margin, totalItems };
             }, [quantities, products]);
+
+            const handleDelete = () => {
+                setQuantities({});
+                localStorage.removeItem('savedOrder');
+                setShowSummary(false);
+                setConfirmDelete(false);
+            };
 
             const handleWhatsAppShare = (phoneNumber) => {
                 let message = "*📋 PEDIDO HELADOS - DETALLE*\n";
@@ -213,25 +300,13 @@
                 message += "--------------------------------\n";
                 message += `📈 Ganancia Est.: ${formatCurrency(totals.profit)}\n`;
                 
-                let url = "";
-                if (phoneNumber) {
-                     url = `https://wa.me/${phoneNumber}?text=${encodeURIComponent(message)}`;
-                } else {
-                     url = `https://wa.me/?text=${encodeURIComponent(message)}`;
-                }
+                const url = phoneNumber 
+                    ? `https://wa.me/${phoneNumber}?text=${encodeURIComponent(message)}`
+                    : `https://wa.me/?text=${encodeURIComponent(message)}`;
                
                 window.open(url, '_blank');
             };
 
-            const handleDelete = () => {
-                setQuantities({});
-                // Reset prices to initial if desired, but keeping edits might be better feature.
-                // setProducts(INITIAL_DATA); 
-                setShowSummary(false);
-                setConfirmDelete(false);
-            };
-
-            // Lista de items seleccionados para mostrar en el modal de edición
             const selectedItems = useMemo(() => {
                 return Object.entries(quantities)
                     .map(([id, qty]) => {
@@ -243,7 +318,7 @@
             }, [quantities, products]);
 
             return (
-                <div className="min-h-screen pb-24">
+                <div className="min-h-screen pb-24 relative">
                     {/* Header */}
                     <header className="bg-blue-900 text-white shadow-lg sticky top-0 z-10">
                         <div className="max-w-4xl mx-auto p-4 pb-2 flex justify-between items-center">
@@ -258,36 +333,52 @@
                                 <div className="text-2xl font-bold text-white leading-none">{totals.totalItems} <span className="text-sm font-normal">u.</span></div>
                             </div>
                         </div>
-                        {/* Sub-header de Ganancia */}
                         <div className="bg-blue-800 px-4 py-1 flex justify-between items-center max-w-4xl mx-auto">
                             <span className="text-xs text-blue-200">Ganancia Estimada:</span>
                             <span className={`font-bold text-sm ${totals.profit >= 0 ? 'text-green-300' : 'text-red-300'}`}>{formatCurrency(totals.profit)}</span>
                         </div>
                     </header>
 
-                    {/* Buscador */}
-                    <div className="max-w-4xl mx-auto p-4 pt-6">
-                        <div className="relative mb-4">
-                            <input
-                                type="text"
-                                placeholder="Buscar helado (ej: Crazy, Mega...)"
-                                className="w-full p-3 pl-10 rounded-lg border border-gray-300 shadow-sm focus:ring-2 focus:ring-blue-500 outline-none"
-                                value={searchTerm}
-                                onChange={(e) => setSearchTerm(e.target.value)}
-                            />
-                            <div className="absolute left-3 top-3.5">
-                                <SearchIcon />
+                    <div className="max-w-4xl mx-auto p-4 pt-4">
+                        {/* Botón Agregar Producto y Buscador */}
+                        <div className="flex gap-2 mb-4">
+                            <button 
+                                onClick={() => setShowAddProduct(true)}
+                                className="bg-green-600 text-white px-4 rounded-lg flex items-center justify-center shadow-sm hover:bg-green-700 transition-colors"
+                            >
+                                <PlusIcon />
+                            </button>
+                            <div className="relative flex-1">
+                                <input
+                                    type="text"
+                                    placeholder="Buscar..."
+                                    className="w-full p-3 pl-10 rounded-lg border border-gray-300 shadow-sm focus:ring-2 focus:ring-blue-500 outline-none"
+                                    value={searchTerm}
+                                    onChange={(e) => setSearchTerm(e.target.value)}
+                                />
+                                <div className="absolute left-3 top-3.5">
+                                    <SearchIcon />
+                                </div>
                             </div>
                         </div>
 
-                        {/* Contador de Productos en Lista */}
-                        <div className="mb-3 flex justify-between items-end px-1">
-                            <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">
-                                Catálogo
-                            </p>
-                            <p className="text-xs text-gray-400">
-                                Mostrando {filteredProducts.length} de {products.length} variedades
-                            </p>
+                        {/* Filtros por Categoría */}
+                        <div className="mb-6">
+                            <div className="flex gap-2 overflow-x-auto pb-2 hide-scrollbar">
+                                {categories.map(cat => (
+                                    <button
+                                        key={cat}
+                                        onClick={() => setSelectedCategory(cat)}
+                                        className={`whitespace-nowrap px-4 py-1.5 rounded-full text-sm font-medium transition-colors ${
+                                            selectedCategory === cat 
+                                            ? 'bg-blue-600 text-white shadow-md' 
+                                            : 'bg-white text-gray-600 border border-gray-200 hover:bg-gray-50'
+                                        }`}
+                                    >
+                                        {cat}
+                                    </button>
+                                ))}
+                            </div>
                         </div>
 
                         {/* Lista de Productos */}
@@ -310,7 +401,6 @@
                                         </div>
 
                                         <div className="mt-4 bg-gray-50 p-3 rounded-lg flex flex-col gap-3">
-                                            {/* Control Cajas */}
                                             <div className="flex items-center justify-between">
                                                 <div className="flex items-center gap-2 text-sm text-gray-600">
                                                     <BoxIcon />
@@ -329,7 +419,6 @@
                                                 </div>
                                             </div>
 
-                                            {/* Control Unidades */}
                                             <div className="flex items-center justify-between">
                                                 <div className="flex items-center gap-2 text-sm text-gray-600">
                                                     <UnitIcon />
@@ -378,6 +467,83 @@
                         </div>
                     )}
 
+                    {/* Modal: Agregar Producto */}
+                    {showAddProduct && (
+                        <div className="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center p-4">
+                            <div className="bg-white w-full max-w-sm rounded-2xl p-6 animate-slide-up shadow-2xl">
+                                <div className="flex justify-between items-center mb-4 border-b pb-4">
+                                    <h2 className="text-xl font-bold text-gray-800">Nuevo Producto</h2>
+                                    <button onClick={() => setShowAddProduct(false)} className="text-gray-400 hover:text-gray-600">
+                                        <XIcon />
+                                    </button>
+                                </div>
+                                <form onSubmit={handleAddProductSubmit} className="space-y-4">
+                                    <div>
+                                        <label className="block text-xs font-bold text-gray-700 mb-1">Nombre Helado</label>
+                                        <input 
+                                            required 
+                                            className="w-full p-2 border rounded bg-gray-50 focus:ring-2 focus:ring-blue-500 outline-none" 
+                                            placeholder="Ej: Super Chocolate"
+                                            value={newProductData.name}
+                                            onChange={e => setNewProductData({...newProductData, name: e.target.value})}
+                                        />
+                                    </div>
+                                    <div className="grid grid-cols-2 gap-4">
+                                        <div>
+                                            <label className="block text-xs font-bold text-gray-700 mb-1">Categoría</label>
+                                            <input 
+                                                required 
+                                                className="w-full p-2 border rounded bg-gray-50 focus:ring-2 focus:ring-blue-500 outline-none" 
+                                                placeholder="Ej: Paletas"
+                                                list="category-list"
+                                                value={newProductData.category}
+                                                onChange={e => setNewProductData({...newProductData, category: e.target.value})}
+                                            />
+                                            <datalist id="category-list">
+                                                {categories.filter(c => c !== "Todos").map(c => <option key={c} value={c} />)}
+                                            </datalist>
+                                        </div>
+                                        <div>
+                                            <label className="block text-xs font-bold text-gray-700 mb-1">Unid. x Caja</label>
+                                            <input 
+                                                required type="number" min="1"
+                                                className="w-full p-2 border rounded bg-gray-50 focus:ring-2 focus:ring-blue-500 outline-none" 
+                                                placeholder="Ej: 20"
+                                                value={newProductData.unitsPerBox}
+                                                onChange={e => setNewProductData({...newProductData, unitsPerBox: e.target.value})}
+                                            />
+                                        </div>
+                                    </div>
+                                    <div className="grid grid-cols-2 gap-4">
+                                        <div>
+                                            <label className="block text-xs font-bold text-gray-700 mb-1">Costo c/IVA ($)</label>
+                                            <input 
+                                                required type="number" min="0"
+                                                className="w-full p-2 border rounded bg-gray-50 focus:ring-2 focus:ring-blue-500 outline-none" 
+                                                placeholder="Lo que pagas"
+                                                value={newProductData.costGross}
+                                                onChange={e => setNewProductData({...newProductData, costGross: e.target.value})}
+                                            />
+                                        </div>
+                                        <div>
+                                            <label className="block text-xs font-bold text-green-700 mb-1">Precio Venta ($)</label>
+                                            <input 
+                                                required type="number" min="0"
+                                                className="w-full p-2 border border-green-200 rounded bg-green-50 focus:ring-2 focus:ring-green-500 outline-none font-bold text-green-800" 
+                                                placeholder="Al público"
+                                                value={newProductData.srp}
+                                                onChange={e => setNewProductData({...newProductData, srp: e.target.value})}
+                                            />
+                                        </div>
+                                    </div>
+                                    <button type="submit" className="w-full bg-blue-600 text-white font-bold py-3 rounded-lg mt-4 hover:bg-blue-700">
+                                        Guardar Producto
+                                    </button>
+                                </form>
+                            </div>
+                        </div>
+                    )}
+
                     {/* Modal de Rentabilidad y Edición */}
                     {showSummary && (
                         <div className="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4">
@@ -416,10 +582,14 @@
                                     
                                     {/* Lista de Edición de Precios */}
                                     <div>
-                                        <h3 className="text-sm font-bold text-gray-700 mb-2 flex items-center gap-2">
-                                            <EditIcon /> Simular Precios (Editar)
-                                        </h3>
-                                        <p className="text-xs text-gray-500 mb-3">Ajusta el "Precio Venta" para ver cómo mejora tu margen.</p>
+                                        <div className="flex justify-between items-center mb-3">
+                                            <h3 className="text-sm font-bold text-gray-700 flex items-center gap-2">
+                                                <EditIcon /> Simular Precios
+                                            </h3>
+                                            <button onClick={handleRestorePrices} className="text-xs text-blue-500 flex items-center gap-1 hover:underline">
+                                                <ResetIcon /> Restaurar originales
+                                            </button>
+                                        </div>
                                         
                                         <div className="space-y-3">
                                             {selectedItems.map(item => {
